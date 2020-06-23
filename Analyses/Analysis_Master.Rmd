@@ -59,6 +59,7 @@ demographics <- demographics %>%
   select(-c('age_youngest', 'n_child', 'state'))
 ```
 
+this data includes only weekdays and non-holidays
 
 ```{r}
 # throw out IDs with at least one NA
@@ -66,6 +67,14 @@ atus <- atus %>%
   group_by(ID) %>% 
   na.omit() %>% 
   ungroup()
+
+# throw out IDs that do not have all periods
+atus <- atus %>% 
+  group_by(ID) %>% 
+  summarize(all_periods = all(1:48 %in% period)) %>% 
+  filter(all_periods) %>% 
+  select(ID) %>% 
+  semi_join(x = atus, y = ., by = "ID")
 
 # table matching description to letter
 string_table <- distinct(atus, description) %>% 
@@ -81,25 +90,51 @@ atus_string <- atus %>%
 ```
 
 ```{r}
-# sample (SHOULD SAMPLE USING WEIGHTS)
-atus_string_samp <- sample_n(atus_string, size = 25000, weight = demographics$ID, replace = TRUE)
+# sample nrows from the dataset using the survey weights
+weights <- demographics %>% filter(ID %in% atus_string$ID) %>% pull(survey_weight)
+atus_string_samp <- sample_n(atus_string, size = 10000, weight = weights, replace = TRUE)
 ```
 
 ```{r}
 # compute the string distances
-dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "osa")
+# dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "osa")
 dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "hamming")
-dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "lcs")
+# dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "lcs")
 
 # top code infinite values
-dist_matrix[is.infinite(dist_matrix)] <- 100
 # hist(dist_matrix)
+dist_matrix[is.infinite(dist_matrix)] <- 1000
+```
+
+## optimal clusters
+
+```{r}
+# get optimal cluster sizes 
+hcl_ch <- NbClust(
+  data = NULL,
+  diss = dist_matrix,
+  distance = NULL,
+  method = 'ward.D2',
+  max.nc = 10,
+  min.nc = 4,
+  index = 'silhouette'
+)
+hcl_ch$All.index %>% plot(type = 'l', x = 4:10, main = 'Hierarchical: Silhouette', xlab = 'n clusters')
+```
+
+
+```{r}
+# increase sample size
+n_sample <- 25000
+atus_string_samp <- sample_n(atus_string, size = n_sample, weight = weights, replace = TRUE)
+
+# compute the string distances
+dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "hamming")
 
 # ward (D2) linkage hier clustering
 hcl_ward <- hclust(d = dist_matrix, method = 'ward.D2')
-plot(hcl_ward)
+# plot(hcl_ward)
 ```
-
 
 ```{r}
 # convert cluster to dendrogram
@@ -126,32 +161,20 @@ ggplot(ggd1$segments) +
 rm(ggd1, dend)
 ```
 
-## optimal clusters
-
-```{r}
-# get optimal cluster sizes 
-hcl_ch <- NbClust(
-  data = NULL,
-  diss = dist_matrix,
-  distance = NULL,
-  method = 'ward.D2',
-  max.nc = 20,
-  min.nc = 4,
-  index = 'silhouette'
-)
-hcl_ch$All.index %>% plot(type = 'l', x = 4:20, main = 'Hierarchical: Silhouette', xlab = 'n clusters')
-```
 
 ```{r}
 # get labels from model
-groupings <- cutree(hcl_ward, 8)
+n_clusters <- 5
+groupings <- cutree(hcl_ward, n_clusters)
 atus_string_samp$cluster <- groupings
 ```
 
 ```{r}
 # frequency of each cluster
 hist(groupings)
+```
 
+```{r}
 # convert df back to long with a row per activity
 atus_samp <- atus_string_samp %>%
   # sample_n(1000) %>%
@@ -163,413 +186,98 @@ atus_samp <- atus_string_samp %>%
   na.omit() %>% 
   mutate(period = as.numeric(period),
          ID = as.factor(ID))
-
-# activity frequency per cluster
-atus_samp %>% 
-  group_by(cluster, description) %>% 
-  tally() %>%
-  mutate(prop = n / sum(n)) %>% 
-  ggplot(aes(x = description, y = prop, fill = description)) +
-  geom_col() +
-  facet_wrap(~cluster, ncol = 1) +
-   theme(axis.text = element_text(size = 7),
-        axis.text.x = element_text(angle = 60, hjust = 1))
 ```
+
 
 ```{r}
 # need to shift time four hours and fix labels
-labels <- as.character(seq(0, 24, by = 2))
-labels <- c(labels[3:13], labels[1:2])
+labels <- as.character(seq(2, 24, by = 2))
+labels <- c(labels[2:12], labels[1:2])
+labels[1] <- "4am"
 
+# sequence plots by cluster
 atus_samp %>%
+  mutate(cluster = if_else(cluster == 1, "Cluster 1", as.character(cluster)),
+         cluster = factor(cluster, levels = c("Cluster 1", as.character(2:n_clusters)))) %>% 
   ggplot(aes(x = period, y = ID, fill = description)) +
   geom_tile() +
   scale_y_discrete(labels = NULL) +
   scale_x_continuous(labels = labels,
                      breaks = seq(0, 48, by = 4)) +
-  facet_wrap(~cluster,  scales = 'free_y') +
+  facet_wrap(~cluster, ncol = 2, scales = 'free_y') +
   labs(title = "Sequence plots of each individual's day by cluster",
-       subtitle = "Based on Hamming edit distance and Ward D2 clustering",
+       subtitle = "Based on Hamming edit distance and Ward D2 clustering\nEach row represents an individual person's day",
        x = "Time of day", 
-       y = NULL) +
-  theme(legend.title = element_blank()) +
-  theme_web
+       y = "Individuals") +
+  theme(legend.title = element_blank()) # +
+  # theme_web
 ```
 
 
 ```{r}
-save_plot(name = "Sequence_plots", height = 8, width = 10)
+save_plot(name = "Sequence_plots", height = 8, width = 8)
 ```
 
 
-
-
-
-
-
-
-
-# code from cluster analysis
+# what activities defines each cluster?
 
 ```{r}
-theme_web_light <- theme(
-    axis.title = element_text(color = "gray30"),
-  axis.ticks = element_line(color = NA),
-  plot.title = element_text(color = "gray30",
-                            face = "bold"),
-  plot.subtitle = element_text(size = 10,
-                               color = "gray30"),
-  text = element_text(family = "Helvetica"),
-  plot.caption = element_text(face = "italic",
-                              size = 6,
-                              color = 'grey50')
-)
-
-theme_web <- theme(
-  plot.background = element_rect(fill = NA,
-                                 color = "gray95",
-                                 size = 10),
-  plot.margin = unit(c(1, 1, 1, 1), "cm"),
-) + theme_web_light
-```
-
-
-# Introduction and research question
-
-
-```{r}
-# density plot of activities
-
-# add mean minutes infront of each activity name
-density_plot_data <- atus_long %>% 
-  group_by(description) %>% 
-  mutate(Mean = round(mean(value), 0)) %>% 
-  ungroup() %>% 
-  mutate(label = paste0(round(Mean, 1), ' min: ', description))
-
-# sort the label by the mean and move 'other' to bottom
-label_order <- density_plot_data %>% 
-  distinct(description, label, Mean) %>% 
-  arrange(desc(Mean))
-label_order <- label_order[c(1:10, 12:15, 11),]
-
-# plot it
-density_plot_data %>% 
-  mutate(label = factor(label,
-                        levels = label_order$label)) %>% 
-  ggplot(aes(x = value, group = label, fill = label)) +
-  geom_density(color = 'grey50', alpha = 0.4, adjust = 2) +
-  scale_fill_discrete(name = 'Mean minutes: Activity') +
-  scale_x_log10(labels = function(x) scales::comma(x, accuracy = 1)) +
-  scale_y_continuous(labels = NULL) +
-  labs(title = 'Weekend time use activities',
-       subtitle = 'Non-zero values only',
-       x = 'Minutes per day',
-       y = NULL) +
-  theme(legend.position = c(0.38, 0.65),
-        legend.box.background = element_rect(color = 'white'),
-        legend.background = element_rect(color = 'grey90'),
-        legend.text = element_text(size = 7),
-        legend.key.size = unit(0.4, "cm")) +
-    guides(fill = guide_legend(ncol = 2))
-
-save_plot(name = 'Weekend_time_use_activities')
-save_plot(name = 'Weekend_time_use_activities', 
-          plot = ggplot2::last_plot() + theme_web,
-          type = 'svg',
-          height = 5)
-```
-
-
-# Key findings
-
-
-# Analysis
-
-## Distance
-
-
-```{r fig.height=4, fig.width=7}
-# distance between categories
-atus_long %>% 
-  pivot_wider(values_from = value, names_from = description) %>% 
-  select(-ID) %>% 
-  as.matrix() %>% 
-  t() %>% 
-  dist() %>% 
-  as.matrix() %>% 
-  reshape::melt() %>% 
-  ggplot(aes(x = reorder(X1, -value), y = reorder(X2, -value), fill = value)) +
-  geom_tile() +
-  scale_fill_gradient2(labels = scales::comma) +
-  labs(title = "Euclidean distance between activities",
-       x = NULL,
-       y = NULL) +
-  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+# activity frequency per cluster
+atus_samp %>% 
+  group_by(cluster, description) %>% 
+  tally() %>%
+  mutate(proportion = n / sum(n)) %>% 
+  ggplot(aes(x = description, y = proportion, fill = description)) +
+  geom_col() +
+  facet_wrap(~cluster, ncol = 1) +
+   theme(axis.text = element_text(size = 7),
+        axis.text.x = element_text(angle = 60, hjust = 1),
         legend.title = element_blank())
-
-save_plot(name = 'Euclidean_distance_between_activities')
-save_plot(name = 'Euclidean_distance_between_activities', 
-          plot = ggplot2::last_plot() + theme_web + theme(axis.text = element_text(size = 7)),
-          type = 'svg')
 ```
 
 ```{r}
-# pivot wider and turn into matrix
-atus_wide <- atus_long %>% 
-  pivot_wider(values_from = value, names_from = description) %>% 
-  select(-ID) %>% 
-  as.matrix()
-```
-
-```{r}
-# resample using survey weights
-total_rows <- nrow(atus_wide)
-sample_size <- 25000
-rows_to_keep <- sample(1:total_rows, size = sample_size, prob = demographics$survey_weight, replace = TRUE)
-IDs_kept <- atus_long %>% 
-  pivot_wider(values_from = value, names_from = description) %>% 
-  select(ID) %>% 
-  .[rows_to_keep,]
-atus_resampled <- atus_wide[rows_to_keep,]
-```
-
-## Clustering
-
-```{r}
-# distance matrix for features
-dist_sc <- dist(atus_resampled, method = 'euclidean')
-
-# ward (D2) linkage hier clustering
-hcl_ward <- hclust(d = dist_sc, method = 'ward.D2')
-# hcl_single <- hclust(d = dist_sc, method = 'single')
-# hcl_centroid <- hclust(d = dist_sc, method = 'centroid')
-```
-
-```{r}
-# convert cluster to dendrogram
-dend <- as.dendrogram(hcl_ward)
-dend <- cut(dend, h = 300)$upper # cut off bottom of dendogram for computation performance
-ggd1 <- as.ggdend(dend)
-```
-
-```{r fig.height=3.7, fig.width=7}
-# plot the dendrogram
-ggplot(ggd1$segments) + 
-  geom_segment(aes(x = x, y = y, xend = xend, yend = yend), color = 'grey50', lwd = 0.6, alpha = 0.7) +
-  coord_cartesian(ylim = c(100, 45000), clip = 'off') +
-  scale_x_continuous(labels = NULL) +
+atus_samp %>% 
+  group_by(cluster, period, description) %>% 
+  tally() %>%
+  mutate(proportion = n / sum(n)) %>% 
+  ungroup() %>% 
+  mutate(cluster = if_else(cluster == 1, "Cluster 1", as.character(cluster)),
+         cluster = factor(cluster, levels = c("Cluster 1", as.character(2:n_clusters)))) %>% 
+  ggplot(aes(x = period, y = proportion, fill = description)) +
+  geom_area(position = 'stack', color = 'white', size = 0.3) +
+  scale_x_continuous(labels = labels,
+                     breaks = seq(0, 48, by = 4)) +
   scale_y_continuous(labels = NULL) +
-  labs(title = 'Hierarchical clustering',
-       subtitle= 'Ward (D2) linkage',
-       x = NULL,
-       y = NULL) +
-  theme(axis.ticks = element_blank(),
-        panel.grid.major.x = element_blank(),
-        panel.grid.minor.x = element_blank(),
-        legend.position = 'none')
-
-save_plot(name = 'Hierarchical_cluster_bw', height = 2.7)
-save_plot(name = 'Hierarchical_cluster_bw', 
-          plot = ggplot2::last_plot() + theme_web,
-          type = 'svg',
-          height = 4,
-          width = 7)
-```
-
-## Choosing number of clusters
-
-```{r}
-# trimmed, colored branches tree
-hcl_k <- 6
-dend <- as.dendrogram(hcl_ward) %>% set("branches_k_color", k = hcl_k) %>% set("labels_colors")
-dend <- cut(dend, h = 300)$upper # cut off bottom of dendogram for computation performance
-ggd1 <- as.ggdend(dend)
+  facet_wrap(~cluster, ncol = 2) +
+  labs(title = "Observed proportion of activities by cluster",
+       subtitle = "Based on Hamming edit distance and Ward D2 clustering\n",
+       x = "Time of day",
+       y = "Proportion") +
+  theme(legend.title = element_blank())
 ```
 
 ```{r}
-# get labels from model
-groupings <- cutree(hcl_ward, hcl_k)
-
-# fix label switching problem
-# get approx cluster size by counting line segments by color (proxy for cluster)
-label_match <- ggd1$segments %>% 
-  filter(col != '<NA>') %>% 
-  group_by(col) %>% 
-  filter(xend <= quantile(xend, 0.99),
-         xend >= quantile(xend, 0.01)) %>% 
-  summarize(x_min = min(xend),
-            x_max = max(xend)) %>% 
-  arrange(x_min) %>% 
-    mutate(Approx_cluster_size = x_max - x_min,
-           Cluster = 1:hcl_k) %>% 
-  arrange(desc(Approx_cluster_size)) %>% 
-  mutate(Actual_cluster = names(rev(sort(table(groupings))))) %>% 
-  select(Dend_cluster = Cluster,
-         Actual_cluster,
-         col)
-
-# replace groupings with similar vector but with switched labels
-correct_clusters <- label_match$Dend_cluster[match(groupings, label_match$Actual_cluster)]
-rm(groupings)
-```
-
-```{r}
-# match brewer palette colors to cluster assignment
-custom_colors <- colorspace::darken(RColorBrewer::brewer.pal(hcl_k, 'Spectral'), amount = 0.2)
-label_match <- label_match %>% 
-  arrange(Dend_cluster) %>% 
-  mutate(brew_palette = custom_colors)
-
-# replace colors with brewer colors
-ggd1$segments$col <- label_match$brew_palette[match(ggd1$segments$col, label_match$col)]
-```
-
-```{r fig.height=4, fig.width=7}
-# set dashed line for non-cluster segements
-ggd1$segments$linetype <- 'solid'
-ggd1$segments$linetype[which(is.na(ggd1$segments$col))] <- 'dashed'
-
-# set connecting lines to grey
-ggd1$segments$col[is.na(ggd1$segments$col)] <- 'grey50'
-
-# set labels for below the plot
-text_labels <- tribble(
-  ~label, ~x, ~y,
-  'Cluster 1', 1800, -2500,
-  'Cluster 2', 4500, -2500,
-  'Cluster 3', 8500, -2500,
-  'Cluster 4', 13500, -2500,
-  'Cluster 5', 16500, -2500,
-  'Cluster 6', 21000, -2500
-)
-
-# plot the dendrogram
-ggplot(ggd1$segments) + 
-  geom_segment(aes(x = x, y = y, xend = xend, yend = yend), color = ggd1$segments$col,
-               linetype = ggd1$segments$linetype, lwd = 0.6, alpha = 0.7) +
-  geom_text(data = text_labels, aes(label = label, x = x, y = y), family = 'Helvetica') +
-  coord_cartesian(ylim = c(100, 45000), clip = 'off') +
-  scale_x_continuous(labels = NULL) +
-  scale_y_continuous(labels = NULL) +
-  labs(title = 'Hierarchical clustering',
-       subtitle = 'Ward (D2) linkage: 6 cluster solution',
-       x = NULL,
-       y = NULL) +
-  theme(axis.ticks = element_blank(),
-        panel.grid.major.x = element_blank(),
-        panel.grid.minor.x = element_blank(),
-        legend.position = 'none',
-        plot.margin = margin(t = 10, r = 10, b = 30, l = 10, unit = "pt"))
-
-save_plot(name = 'Hierarchical_cluster_col', height = 3)
-save_plot(name = 'Hierarchical_cluster_col', 
-          plot = ggplot2::last_plot() + theme_web,
-          type = 'svg',
-          height = 4,
-          width = 7)
+save_plot(name = "Proportion_plots", height = 8, width = 8)
 ```
 
 
-# Breaking down the clusters
-
-## Activities
-
-```{r}
-# activity densities lined up by cluster
-atus_resampled %>% 
-  as_tibble() %>% 
-  bind_cols(group = as.character(correct_clusters)) %>%
-  mutate(group = if_else(group == '1', 'Cluster 1', group),
-         group = factor(group, levels = c("Cluster 1", 2:6))) %>% 
-  pivot_longer(cols = -group) %>% 
-  mutate(name = factor(name, levels = label_order$description)) %>% 
-  ggplot(aes(x = value, group = name, fill = name)) +
-  geom_density(alpha = 0.4, color = 'grey50', size = 0.5) +
-  scale_fill_discrete(name = NULL) +
-  scale_x_log10(limits = c(10, 1200)) +
-  scale_y_continuous(labels = NULL) +
-  facet_grid(group~., switch = 'y') +
-  labs(title = 'Weekend activities split by cluster',
-       x = 'Minutes per day',
-       y = NULL)
-
-save_plot(name = 'Weekend_activities_split_by_cluster')
-save_plot(name = 'Weekend_activities_split_by_cluster', 
-          plot = ggplot2::last_plot() + theme_web,
-          type = 'svg',
-          height = 5)
-```
-
-
-```{r}
-# average minutes per cluster per activity
-pop_avgs <- label_order %>% select(name = description, Mean_pop = Mean)
-atus_resampled %>% 
-  as_tibble() %>% 
-  bind_cols(group = as.character(correct_clusters)) %>%
-  mutate(group = if_else(group == '1', 'Cluster 1', group),
-         group = factor(group, levels = c("Cluster 1", 2:6))) %>% 
-  pivot_longer(cols = -group) %>% 
-  mutate(name = factor(name, levels = label_order$description)) %>% 
-  group_by(group, name) %>% 
-  summarize(Mean_clus = mean(value)) %>% 
-  left_join(pop_avgs) %>% 
-  mutate(per_diff = Mean_clus / Mean_pop) %>% 
-  arrange(group, desc(per_diff)) %>% 
-  mutate(Mean_clus = round(Mean_clus, 2),
-         per_diff = round(per_diff, 2)) %>% 
-  View
-rm(pop_avgs)
-```
-
-```{r}
-# activites to show
-activities_show <- c(
-  'Caring For Household Member',
-  'Household Activities',
-  'Socializing, Relaxing, and Leisure',
-  'Work')
-
-# densities of activities by cluster
-atus_resampled %>% 
-  as_tibble() %>% 
-  bind_cols(group = as.factor(correct_clusters)) %>%
-  pivot_longer(cols = -group) %>% 
-  filter(name %in% activities_show) %>% 
-  ggplot(aes(x = value, group = group, fill = group)) +
-  geom_density(color = 'grey50', alpha = 0.7) +
-  scale_fill_brewer(palette = 'Spectral', name = 'Cluster') +
-  scale_y_continuous(labels = NULL) +
-  scale_x_log10(labels = function(x) scales::comma(x, accuracy = 1)) +
-  facet_wrap(~name, nrow = 2, scales = 'fixed') +
-  labs(title = 'Most distinct activities after accounting for cluster membership', 
-       x = 'Minutes per day',
-       y = NULL)
-
-save_plot(name = 'Most_distinct_activities')
-save_plot(name = 'Most_distinct_activities', 
-          plot = ggplot2::last_plot() + theme_web,
-          type = 'svg',
-          height = 5)
-```
 
 ## Who makes up each cluster? 
 
 ```{r}
-population <- demographics %>% 
-  right_join(bind_cols(IDs_kept)) %>%
-  mutate(cluster = as.character(correct_clusters[match(ID, pull(IDs_kept))])) %>% 
+population <- distinct(atus_samp, ID, cluster) %>% 
+  left_join(demographics %>% mutate(ID = as.factor(ID)), by = "ID") %>% 
   select(-survey_weight) %>% 
   rename(Age = age, Sex = sex, 'Household income' = HH_income, Married = married, 
-         Race = race, Education = education)
+         Race = race, Education = education) %>% 
+  mutate(cluster = as.character(cluster))
 ```
 
 ```{r}
 Age_plot <- population %>% 
   select(Age, cluster) %>%
   mutate(cluster = if_else(cluster == '1', 'Cluster 1', cluster),
-         cluster = factor(cluster, levels = c("Cluster 1", 2:6))) %>% 
+         cluster = factor(cluster, levels = c("Cluster 1", 2:n_clusters))) %>% 
   pivot_longer(cols = c('Age')) %>%
   ggplot(aes(x = value, fill = cluster)) +
   geom_density(data = population %>% select(Age) %>% pivot_longer(cols = everything()),
@@ -577,7 +285,7 @@ Age_plot <- population %>%
   geom_density(alpha = 0.7, color = 'grey50') +
   scale_fill_brewer(palette = 'Spectral', name = NULL) +
   scale_y_continuous(labels = NULL) +
-  facet_grid(cluster~name, scales = 'fixed',  switch = 'y') +
+  facet_grid(cluster~name, scales = 'free_y',  switch = 'y') +
   labs(title = 'Clusters by distribution of age',
        subtitle = 'Grey distributions represent the population',
        x = 'Age',
@@ -585,8 +293,8 @@ Age_plot <- population %>%
   theme(legend.position = 'none',
         strip.background = element_blank(),
         strip.text.x = element_blank(),
-        plot.margin = unit(c(0.2, 0.2, .9, 0.2), units = 'cm')) +
-  theme_web_light
+        plot.margin = unit(c(0.2, 0.2, .9, 0.2), units = 'cm')) #+
+  # theme_web_light
 ```
 
 ```{r}
@@ -604,7 +312,7 @@ hline_data <- population %>%
 income_plot <- population %>% 
   select('Household income', cluster) %>%
   mutate(cluster = if_else(cluster == '1', 'Cluster 1', cluster),
-         cluster = factor(cluster, levels = c("Cluster 1", 2:6)),
+         cluster = factor(cluster, levels = c("Cluster 1", 2:n_clusters)),
          `Household income` = as.character(scales::comma(`Household income`)),
           `Household income` = factor(`Household income`, levels = income_levels)) %>%
   count(`Household income`, cluster) %>% 
@@ -616,7 +324,7 @@ income_plot <- population %>%
   geom_errorbar(data = hline_data, aes(ymin = proportion , ymax = proportion), color = 'grey50') +
   scale_fill_brewer(palette = 'Spectral', name = NULL) +
   scale_y_continuous(labels = NULL) +
-  facet_grid(cluster~., scales = 'fixed') +
+  facet_grid(cluster~., scales = 'free_y') +
   labs(title = '...by household income',
        subtitle = 'Horizontal lines represent the population',
        x = 'Household income (USD/year)',
@@ -624,13 +332,13 @@ income_plot <- population %>%
   theme(legend.position = 'none',
         axis.text.x = element_text(angle = 40, hjust = 1),
         strip.background = element_blank(),
-        strip.text.y = element_blank()) +
-  theme_web_light
+        strip.text.y = element_blank()) #+
+  # theme_web_light
 ```
 
 ```{r fig.height=5, fig.width=7}
 plot <- gridExtra::arrangeGrob(Age_plot, income_plot, ncol = 2)
-save_plot(name = 'By_age_by_income', plot = plot, height = 3.6)
+save_plot(name = 'By_age_by_income', plot = plot, height = 8)
 save_plot(name = 'By_age_by_income', 
           plot = plot,
           type = 'svg',
@@ -646,20 +354,20 @@ recoded_pop <- population %>%
          Married = recode(Married, '0' = 'Not married', '1' = 'Married'),
          Child = recode(has_child, '0' = 'No children', '1' = 'Children in household'),
          cluster = if_else(cluster == '1', 'Cluster\n1', cluster),
-         cluster = factor(cluster, levels = c("Cluster\n1", 2:6))) %>% 
+         cluster = factor(cluster, levels = c("Cluster\n1", 2:n_clusters))) %>% 
   select(-has_child)
 ```
 
 ```{r}
 # set custom colors
-custom_colors <- rep(RColorBrewer::brewer.pal(hcl_k, 'Spectral'), each = 2)
+custom_colors <- rep(RColorBrewer::brewer.pal(n_clusters, 'Spectral'), each = 2)
 # lighten every other color
-custom_colors[((1:hcl_k %% 2)) == 1] <- colorspace::darken(custom_colors[((1:hcl_k %% 2)) == 1], amount = 0.2)
-custom_colors[((1:hcl_k %% 2) + 1) == 1] <- colorspace::lighten(custom_colors[((1:hcl_k %% 2) + 1) == 1], amount = 0.4)
+custom_colors[((1:n_clusters %% 2)) == 1] <- colorspace::darken(custom_colors[((1:n_clusters %% 2)) == 1], amount = 0.2)
+custom_colors[((1:n_clusters %% 2) + 1) == 1] <- colorspace::lighten(custom_colors[((1:n_clusters %% 2) + 1) == 1], amount = 0.4)
 # set names to match the aes(fill)
 names(custom_colors) <- paste0(rep(sort(unique(recoded_pop$cluster)), each = 2),
                                '-',
-                               rep(c('Male', 'Female'), hcl_k))
+                               rep(c('Male', 'Female'), n_clusters))
 
 
 sex_plot <- recoded_pop %>% 
@@ -680,22 +388,22 @@ sex_plot <- recoded_pop %>%
            label = 'Male', color = 'white', fontface = 'bold', size = 3) +
   annotate(geom = 'text', x = 1, y = 0.8, angle = 90, family = 'Helvetica',
            label = 'Female', color = 'grey30', fontface = 'bold', size = 3) +
-  annotate(geom = 'text', x = 5, y = 0.53, family = 'Helvetica',
+  annotate(geom = 'text', x = 3, y = 0.53, family = 'Helvetica',
            label = 'Population mean', color = 'grey20', fontface = 'bold', size = 3.5) +
   scale_y_continuous(labels = NULL) +
   labs(title = 'Clusters split by sex', 
        x = NULL,
        y = 'Proportion of cluster population') +
   theme(legend.position = 'none',
-        panel.grid.major.y = element_blank()) +
-  theme_web_light
+        panel.grid.major.y = element_blank()) #+
+  # theme_web_light
 ```
 
 ```{r}
 # set names to match the aes(fill)
 names(custom_colors) <- paste0(rep(sort(unique(recoded_pop$cluster)), each = 2),
                                '-',
-                               rep(c('No children', 'Children in household'), hcl_k))
+                               rep(c('No children', 'Children in household'), n_clusters))
 
 # bar plot by child status
 child_plot <- recoded_pop %>% 
@@ -721,15 +429,15 @@ child_plot <- recoded_pop %>%
        x = NULL,
        y = NULL) +
   theme(legend.position = 'none',
-        panel.grid.major.y = element_blank()) +
-  theme_web_light
+        panel.grid.major.y = element_blank()) #+
+  # theme_web_light
 ```
 
 ```{r}
 # set names to match the aes(fill)
 names(custom_colors) <- paste0(rep(sort(unique(recoded_pop$cluster)), each = 2),
                                '-',
-                               rep(c('Not married', 'Married'), hcl_k))
+                               rep(c('Not married', 'Married'), n_clusters))
 
 # bar plot by marital status
 marital_plot <- recoded_pop %>% 
@@ -755,14 +463,14 @@ marital_plot <- recoded_pop %>%
        x = NULL,
        y = '') +
   theme(legend.position = 'none',
-        panel.grid.major.y = element_blank()) +
-  theme_web_light
+        panel.grid.major.y = element_blank()) #+
+  # theme_web_light
 ```
 
 ```{r}
 # attempt to color them to match the cluster colors
 # set custom colors
-custom_colors <- RColorBrewer::brewer.pal(hcl_k, 'Spectral')
+custom_colors <- RColorBrewer::brewer.pal(n_clusters, 'Spectral')
 custom_colors <- append(custom_colors, '#ababab')
 # darken some and lighten others
 custom_colors <- map(custom_colors, function(col) {
@@ -776,10 +484,10 @@ custom_colors <- map(custom_colors, function(col) {
 }) %>% unlist()
 
 # set names to match the aes(fill)
-base_vector <- factor(c("Cluster\n1", 2:hcl_k, 'Population'), levels = c("Cluster\n1", 2:hcl_k, 'Population'))
+base_vector <- factor(c("Cluster\n1", 2:n_clusters, 'Population'), levels = c("Cluster\n1", 2:n_clusters, 'Population'))
 names(custom_colors) <- paste0(rep(base_vector, each = 6),
                                '-',
-                               rep(c('Did not graduate from HS', 'HS', 'Some college', 'Bachelors', 'Masters', 'Doctoral'), hcl_k))
+                               rep(c('Did not graduate from HS', 'HS', 'Some college', 'Bachelors', 'Masters', 'Doctoral'), n_clusters))
 
 # barplot(1:length(custom_colors), col = custom_colors)
 
@@ -793,7 +501,7 @@ text_labels <- tibble(
     'Masters',
     'Doctoral'
   ),
-  x = 7.6,
+  x = 7,
   y = c(0.08, 0.32, 0.59, 0.82, 0.92, 0.99),
   col = colorspace::darken(tail(custom_colors, 6), amount = 0.4))
         
@@ -816,7 +524,7 @@ edu_plot <- recoded_pop %>%
   ungroup() %>% 
   bind_rows(edu_status) %>% 
   mutate(Education = factor(Education, levels = rev(c('Did not graduate from HS', 'HS', 'Some college', 'Bachelors', 'Masters', 'Doctoral'))),
-         cluster = factor(cluster, levels = c("Cluster\n1", 2:6, 'Population'))) %>%
+         cluster = factor(cluster, levels = c("Cluster\n1", 2:n_clusters, 'Population'))) %>%
   mutate(fill = paste0(cluster, '-', Education)) %>% 
   ggplot(aes(x = cluster, y = Proportion)) +
   geom_col(aes(group = Education, fill = fill), position = 'stack', color = 'white') +
@@ -829,8 +537,8 @@ edu_plot <- recoded_pop %>%
        x = NULL,
        y = NULL) +
   theme(legend.position = 'none',
-        panel.grid.major.y = element_blank()) +
-  theme_web_light
+        panel.grid.major.y = element_blank()) #+
+  # theme_web_light
 ```
 
 ```{r fig.height=5, fig.width=7}
@@ -841,13 +549,6 @@ save_plot(name = 'By_sex_child_marital_education',
           type = 'svg',
           height = 6)
 rm(plot)
-```
-
-```{r}
-# save cluster assingnments
-IDs_kept %>%
-  bind_cols(cluster = correct_clusters) %>% 
-  write_csv('Analyses/25k_6_cluster_IDs.csv')
 ```
 
 

@@ -82,16 +82,22 @@ atus_string <- atus %>%
 
 ```{r}
 # sample (SHOULD SAMPLE USING WEIGHTS)
-atus_string_samp <- sample_n(atus_string, size = 2500)
+atus_string_samp <- sample_n(atus_string, size = 25000, weight = demographics$ID, replace = TRUE)
 ```
 
 ```{r}
 # compute the string distances
 dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "osa")
+dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "hamming")
+dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "lcs")
+
+# top code infinite values
+dist_matrix[is.infinite(dist_matrix)] <- 100
+# hist(dist_matrix)
 
 # ward (D2) linkage hier clustering
 hcl_ward <- hclust(d = dist_matrix, method = 'ward.D2')
-# plot(hcl_ward)
+plot(hcl_ward)
 ```
 
 
@@ -106,7 +112,7 @@ ggd1 <- as.ggdend(dend)
 # plot the dendrogram
 ggplot(ggd1$segments) + 
   geom_segment(aes(x = x, y = y, xend = xend, yend = yend), color = 'grey50', lwd = 0.6, alpha = 0.7) +
-  coord_cartesian(ylim = c(10, 700), clip = 'off') +
+  coord_cartesian(ylim = c(10, 1500), clip = 'off') +
   scale_x_continuous(labels = NULL) +
   scale_y_continuous(labels = NULL) +
   labs(title = 'Hierarchical clustering',
@@ -117,7 +123,84 @@ ggplot(ggd1$segments) +
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
         legend.position = 'none')
+rm(ggd1, dend)
 ```
+
+## optimal clusters
+
+```{r}
+# get optimal cluster sizes 
+hcl_ch <- NbClust(
+  data = NULL,
+  diss = dist_matrix,
+  distance = NULL,
+  method = 'ward.D2',
+  max.nc = 20,
+  min.nc = 4,
+  index = 'silhouette'
+)
+hcl_ch$All.index %>% plot(type = 'l', x = 4:20, main = 'Hierarchical: Silhouette', xlab = 'n clusters')
+```
+
+```{r}
+# get labels from model
+groupings <- cutree(hcl_ward, 8)
+atus_string_samp$cluster <- groupings
+```
+
+```{r}
+# frequency of each cluster
+hist(groupings)
+
+# convert df back to long with a row per activity
+atus_samp <- atus_string_samp %>%
+  # sample_n(1000) %>%
+  separate(string, as.character(1:48), sep = 1:48) %>% 
+  pivot_longer(cols = 2:49) %>%
+  rename(string = value,
+         period = name) %>% 
+  left_join(string_table, by = 'string') %>% 
+  na.omit() %>% 
+  mutate(period = as.numeric(period),
+         ID = as.factor(ID))
+
+# activity frequency per cluster
+atus_samp %>% 
+  group_by(cluster, description) %>% 
+  tally() %>%
+  mutate(prop = n / sum(n)) %>% 
+  ggplot(aes(x = description, y = prop, fill = description)) +
+  geom_col() +
+  facet_wrap(~cluster, ncol = 1) +
+   theme(axis.text = element_text(size = 7),
+        axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+```{r}
+# need to shift time four hours and fix labels
+labels <- as.character(seq(0, 24, by = 2))
+labels <- c(labels[3:13], labels[1:2])
+
+atus_samp %>%
+  ggplot(aes(x = period, y = ID, fill = description)) +
+  geom_tile() +
+  scale_y_discrete(labels = NULL) +
+  scale_x_continuous(labels = labels,
+                     breaks = seq(0, 48, by = 4)) +
+  facet_wrap(~cluster,  scales = 'free_y') +
+  labs(title = "Sequence plots of each individual's day by cluster",
+       subtitle = "Based on Hamming edit distance and Ward D2 clustering",
+       x = "Time of day", 
+       y = NULL) +
+  theme(legend.title = element_blank()) +
+  theme_web
+```
+
+
+```{r}
+save_plot(name = "Sequence_plots", height = 8, width = 10)
+```
+
 
 
 

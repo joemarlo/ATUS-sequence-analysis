@@ -92,14 +92,14 @@ atus_string <- atus %>%
 ```{r}
 # sample nrows from the dataset using the survey weights
 weights <- demographics %>% filter(ID %in% atus_string$ID) %>% pull(survey_weight)
-atus_string_samp <- sample_n(atus_string, size = 10000, weight = weights, replace = TRUE)
+atus_string_samp <- sample_n(atus_string, size = 3000, weight = weights, replace = TRUE)
 ```
 
 ```{r}
 # compute the string distances
 # dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "osa")
 dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "hamming")
-# dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "lcs")
+dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "lcs")
 
 # top code infinite values
 # hist(dist_matrix)
@@ -125,11 +125,12 @@ hcl_ch$All.index %>% plot(type = 'l', x = 4:10, main = 'Hierarchical: Silhouette
 
 ```{r}
 # increase sample size
-n_sample <- 25000
+n_sample <- 10000
 atus_string_samp <- sample_n(atus_string, size = n_sample, weight = weights, replace = TRUE)
 
 # compute the string distances
 dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "hamming")
+dist_matrix <- stringdistmatrix(a = atus_string_samp$string, method = "lcs")
 
 # ward (D2) linkage hier clustering
 hcl_ward <- hclust(d = dist_matrix, method = 'ward.D2')
@@ -147,7 +148,7 @@ ggd1 <- as.ggdend(dend)
 # plot the dendrogram
 ggplot(ggd1$segments) + 
   geom_segment(aes(x = x, y = y, xend = xend, yend = yend), color = 'grey50', lwd = 0.6, alpha = 0.7) +
-  coord_cartesian(ylim = c(10, 1500), clip = 'off') +
+  coord_cartesian(ylim = c(10, 3000), clip = 'off') +
   scale_x_continuous(labels = NULL) +
   scale_y_continuous(labels = NULL) +
   labs(title = 'Hierarchical clustering',
@@ -164,7 +165,7 @@ rm(ggd1, dend)
 
 ```{r}
 # get labels from model
-n_clusters <- 5
+n_clusters <- 6
 groupings <- cutree(hcl_ward, n_clusters)
 atus_string_samp$cluster <- groupings
 ```
@@ -215,7 +216,7 @@ atus_samp %>%
 
 
 ```{r}
-save_plot(name = "Sequence_plots", height = 8, width = 8)
+save_plot(name = "Sequence_plots_Hamming", height = 8, width = 8)
 ```
 
 
@@ -257,7 +258,7 @@ atus_samp %>%
 ```
 
 ```{r}
-save_plot(name = "Proportion_plots", height = 8, width = 8)
+save_plot(name = "Proportion_plots_Hamming", height = 8, width = 8)
 ```
 
 
@@ -501,7 +502,7 @@ text_labels <- tibble(
     'Masters',
     'Doctoral'
   ),
-  x = 7,
+  x = 8,
   y = c(0.08, 0.32, 0.59, 0.82, 0.92, 0.99),
   col = colorspace::darken(tail(custom_colors, 6), amount = 0.4))
         
@@ -532,7 +533,7 @@ edu_plot <- recoded_pop %>%
   geom_text(data = text_labels, aes(label = label, x = x, y = y), 
             hjust = 0, color = text_labels$col, size = 2.5, family = 'Helvetica') +
   scale_y_continuous(labels = NULL) +
-  coord_cartesian(xlim = c(1, 9), clip = 'off') +
+  coord_cartesian(xlim = c(1, 10), clip = 'off') +
   labs(title = '...by education', 
        x = NULL,
        y = NULL) +

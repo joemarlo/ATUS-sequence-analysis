@@ -3,7 +3,7 @@
 
 ## Plots
 
-### Hamming edit distance (substitutions only)
+### Hamming edit distance: substitutions only
 <p align="center">
 <img src="Analyses/Plots/Sequence_plots_Hamming.png" width=79%>
 </p>
@@ -14,7 +14,7 @@
 </p>
 
 
-## Longest common subsequence (LCS) edit distance (insertions, deletions only)
+### Longest common subsequence (LCS) edit distance: insertions, deletions only
 
 <p align="center">
 <img src="Analyses/Plots/Sequence_plots_LCS.png" width=79%>

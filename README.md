@@ -1,16 +1,9 @@
-# ATUS-sequence-analysis
+# Sequence analysis of how individuals spend their day
 
-
-## Plots
-
+Finding patterns in how individuals spending their day by applying [sequence analysis techniques](https://en.wikipedia.org/wiki/Social_sequence_analysis) à la [Abbot](https://www.jstor.org/stable/2780695) — string-editing techniques, dissimilarity matrices, and hierarchical clustering.
 
 <p align="center">
 <img src="Analyses/Plots/Sequence_plots_OSA.png" width=79%>
-</p>
-
-<br>
-<p align="center">
-<img src="Analyses/Plots/Proportion_plots_OSA.png" width=79%>
 </p>
 
 <br>
